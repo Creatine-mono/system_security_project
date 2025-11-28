@@ -1,22 +1,109 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ShieldAlertIcon, GaugeIcon, TrendingUpIcon, AlertTriangleIcon, Search } from "lucide-react"
+import { ShieldAlertIcon, GaugeIcon, TrendingUpIcon, AlertTriangleIcon, Search, Loader2, Database, RefreshCw } from "lucide-react"
 import { DashboardChart } from "@/components/dashboard-chart"
-import { RecentTransactions } from "@/components/recent-transactions"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { useState } from "react"
+
+type HistoryItem = {
+  id: number
+  query: string
+  created_at: string
+  status?: string
+}
+
+type Summary = {
+  total: number
+  by_action: { action: string; count: number; last_run: string }[]
+}
+
+type NewsItem = {
+  cve: string
+  summary: string
+  published: string
+}
 
 export default function DashboardPage() {
   const [cveSearch, setCveSearch] = useState("")
+  const [searching, setSearching] = useState(false)
+  const [recentHistory, setRecentHistory] = useState<HistoryItem[]>([])
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [summary, setSummary] = useState<Summary | null>(null)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [loadingSummary, setLoadingSummary] = useState(false)
+  const [news, setNews] = useState<NewsItem[]>([])
+  const [newsError, setNewsError] = useState<string | null>(null)
+  const [loadingNews, setLoadingNews] = useState(false)
 
-  const handleSearch = () => {
+  useEffect(() => {
+    loadRecentHistory()
+    loadSummary()
+    loadNews()
+  }, [])
+
+  const handleSearch = async () => {
     if (cveSearch.trim()) {
-      // Navigate to CVE history page with search query
+      setSearching(true)
+      try {
+        // 백엔드에 기록을 남기기 위해 한번 조회 호출
+        await fetch(`/api/vulnerability/cve?id=${encodeURIComponent(cveSearch)}`)
+      } catch (_) {
+        // 실패해도 히스토리 화면으로 안내
+      }
+      setSearching(false)
       window.location.href = `/dashboard/cve-history?search=${encodeURIComponent(cveSearch)}`
     }
   }
+
+  async function loadRecentHistory() {
+    setHistoryError(null)
+    try {
+      const res = await fetch("/api/history?action=cve_lookup&limit=10", { cache: "no-store" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "최근 검색을 불러오지 못했습니다.")
+      setRecentHistory(data.items || [])
+    } catch (err: any) {
+      setHistoryError(err.message || "최근 검색을 불러오지 못했습니다.")
+    }
+  }
+
+  async function loadSummary() {
+    setLoadingSummary(true)
+    setSummaryError(null)
+    try {
+      const res = await fetch("/api/dashboard/summary", { cache: "no-store" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "요약 정보를 불러오지 못했습니다.")
+      setSummary(data)
+    } catch (err: any) {
+      setSummaryError(err.message || "요약 정보를 불러오지 못했습니다.")
+    } finally {
+      setLoadingSummary(false)
+    }
+  }
+
+  async function loadNews() {
+    setLoadingNews(true)
+    setNewsError(null)
+    try {
+      const res = await fetch("/api/vulnerability/news", { cache: "no-store" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "뉴스를 불러오지 못했습니다.")
+      setNews(data.items || [])
+    } catch (err: any) {
+      setNewsError(err.message || "뉴스를 불러오지 못했습니다.")
+    } finally {
+      setLoadingNews(false)
+    }
+  }
+
+  const lastCve = recentHistory[0]?.query || "조회 내역 없음"
+  const lastTime = recentHistory[0]?.created_at
+    ? new Date(recentHistory[0].created_at).toLocaleString()
+    : "N/A"
+  const totalLookups = summary?.by_action?.find((x) => x.action === "cve_lookup")?.count ?? 0
 
   return (
     <div className="flex flex-col gap-4">
@@ -42,54 +129,58 @@ export default function DashboardPage() {
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               />
             </div>
-            <Button onClick={handleSearch}>Search</Button>
+            <Button onClick={handleSearch} disabled={searching}>
+              {searching && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Search & Save
+            </Button>
           </div>
         </CardContent>
       </Card>
 
       <div className="space-y-4">
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">CVE ID</CardTitle>
-              <ShieldAlertIcon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">CVE-2024-1234</div>
-              <p className="text-xs text-muted-foreground">Latest vulnerability</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">CVSS</CardTitle>
+              <CardTitle className="text-sm font-medium">누적 CVE 조회</CardTitle>
               <GaugeIcon className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">7.8</div>
-              <p className="text-xs text-muted-foreground">High severity score</p>
+              <div className="text-2xl font-bold">{totalLookups}</div>
+              <p className="text-xs text-muted-foreground">백엔드 기록에 저장된 총 CVE 조회 건수</p>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">EPSS</CardTitle>
+              <CardTitle className="text-sm font-medium">총 실행 기록</CardTitle>
               <TrendingUpIcon className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">0.85</div>
-              <p className="text-xs text-muted-foreground">85% exploit probability</p>
+              <div className="text-2xl font-bold">{summary?.total ?? 0}</div>
+              <p className="text-xs text-muted-foreground">모든 액션(CVE, EPSS, 패키지 등) 합계</p>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Risk</CardTitle>
+              <CardTitle className="text-sm font-medium">요약 새로고침</CardTitle>
               <AlertTriangleIcon className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">Critical</div>
-              <p className="text-xs text-muted-foreground">Immediate action required</p>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Database className="h-4 w-4" />
+                <span>{summaryError ? summaryError : "백엔드 요약을 불러옵니다."}</span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                onClick={loadSummary}
+                disabled={loadingSummary}
+              >
+                {loadingSummary ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                새로고침
+              </Button>
             </CardContent>
           </Card>
         </div>
@@ -99,7 +190,7 @@ export default function DashboardPage() {
         <Card className="lg:col-span-4">
           <CardHeader>
             <CardTitle>CVE Metrics Overview</CardTitle>
-            <CardDescription>CVSS, EPSS, and Risk scores visualization</CardDescription>
+            <CardDescription>CVSS, EPSS, Risk 지표를 한눈에</CardDescription>
           </CardHeader>
           <CardContent className="pl-2">
             <DashboardChart />
@@ -109,10 +200,37 @@ export default function DashboardPage() {
         <Card className="lg:col-span-3">
           <CardHeader>
             <CardTitle>CVE Exploitation News</CardTitle>
-            <CardDescription>Recent real-world exploitation cases</CardDescription>
+            <CardDescription>최근 CVE 관련 기사/요약 7건</CardDescription>
           </CardHeader>
           <CardContent>
-            <RecentTransactions />
+            {newsError && <p className="text-sm text-red-500">{newsError}</p>}
+            {!newsError && news.length === 0 && !loadingNews && (
+              <p className="text-sm text-muted-foreground">뉴스가 없습니다.</p>
+            )}
+            {loadingNews && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> 불러오는 중...
+              </div>
+            )}
+            <div className="space-y-3">
+              {news.map((item, idx) => (
+                <div key={idx} className="rounded-lg border bg-muted/30 p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono font-semibold">{item.cve}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {item.published ? new Date(item.published).toLocaleString() : "N/A"}
+                    </span>
+                  </div>
+                  <p className="text-sm mt-1">{item.summary || "요약 없음"}</p>
+                </div>
+              ))}
+            </div>
+            <div className="pt-3">
+              <Button size="sm" variant="ghost" onClick={loadNews} disabled={loadingNews}>
+                {loadingNews ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                새로고침
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
